@@ -208,6 +208,11 @@ function parsePage(html: string, url: string, isSSL: boolean): ParsedPage {
     [/freshchat|freshdesk/i, 'Freshchat'],
     [/podium/i, 'Podium'],
     [/birdeye/i, 'Birdeye'],
+    [/intaker/i, 'Intaker'],
+    [/apexchat/i, 'ApexChat'],
+    [/callrail/i, 'CallRail Chat'],
+    [/leadferno/i, 'LeadFerno'],
+    [/ruby\.com|ruby\s*receptionist/i, 'Ruby'],
     [/chat-widget|chatwidget|live-chat|livechat-widget/i, 'Chat Widget'],
   ];
   for (const [pattern, name] of chatPatterns) {
@@ -240,11 +245,20 @@ function parsePage(html: string, url: string, isSSL: boolean): ParsedPage {
     /attorney|lawyer|team|about|people|staff|professionals/i.test(l.href + ' ' + l.text)
   );
 
-  // Reviews from schema
+  // Reviews from schema — search recursively for aggregateRating in any nested object
   let reviewCount: number | null = null;
   let reviewRating: number | null = null;
+  function findAggregateRating(obj: any): any {
+    if (!obj || typeof obj !== 'object') return null;
+    if (obj.aggregateRating || obj.AggregateRating) return obj.aggregateRating || obj.AggregateRating;
+    for (const key of Object.keys(obj)) {
+      const found = findAggregateRating(obj[key]);
+      if (found) return found;
+    }
+    return null;
+  }
   for (const item of jsonLd) {
-    const rating = item?.aggregateRating || item?.AggregateRating;
+    const rating = findAggregateRating(item);
     if (rating) {
       reviewCount = parseInt(rating.reviewCount || rating.ratingCount) || null;
       reviewRating = parseFloat(rating.ratingValue) || null;
@@ -289,8 +303,18 @@ function discoverSubpages(homepage: ParsedPage, baseUrl: string): string[] {
     } catch { /* skip */ }
   }
 
+  // Also add common subpage paths as fallbacks
+  const fallbackPaths = ['/about', '/about-us', '/results', '/case-results', '/testimonials', '/reviews', '/attorneys', '/team', '/our-team', '/contact'];
+  for (const path of fallbackPaths) {
+    const fallbackUrl = base.origin + path;
+    if (!seen.has(fallbackUrl)) {
+      candidates.push({ url: fallbackUrl, priority: 0 });
+      seen.add(fallbackUrl);
+    }
+  }
+
   candidates.sort((a, b) => b.priority - a.priority);
-  return candidates.slice(0, 3).map(c => c.url);
+  return candidates.slice(0, 5).map(c => c.url);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -319,6 +343,11 @@ function checkDirectoryLinks(pages: ParsedPage[]): { found: string[]; total: num
     [/lawyers\.com/i, 'Lawyers.com'],
     [/superlawyers\.com/i, 'Super Lawyers'],
     [/martindale\.com/i, 'Martindale-Hubbell'],
+    [/bestlawyers\.com/i, 'Best Lawyers'],
+    [/nolo\.com/i, 'Nolo'],
+    [/yelp\.com/i, 'Yelp'],
+    [/bbb\.org/i, 'BBB'],
+    [/national trial lawyers|thenationaltriallawyers\.org/i, 'National Trial Lawyers'],
   ];
 
   const found: string[] = [];
@@ -338,20 +367,20 @@ function checkDirectoryLinks(pages: ParsedPage[]): { found: string[]; total: num
 // GRADE HELPERS
 // ═══════════════════════════════════════════════════════════
 function gradeFromScore(score: number): { grade: string; label: string } {
-  if (score >= 90) return { grade: 'A+', label: 'Elite Acquisition Machine' };
-  if (score >= 80) return { grade: 'A', label: 'Strong Pipeline' };
-  if (score >= 70) return { grade: 'B+', label: 'Above Average' };
-  if (score >= 60) return { grade: 'B', label: 'Room to Grow' };
-  if (score >= 50) return { grade: 'C+', label: 'Needs Improvement' };
-  if (score >= 40) return { grade: 'C', label: 'Significant Gaps' };
+  if (score >= 85) return { grade: 'A+', label: 'Elite Acquisition Machine' };
+  if (score >= 75) return { grade: 'A', label: 'Strong Pipeline' };
+  if (score >= 65) return { grade: 'B+', label: 'Above Average' };
+  if (score >= 55) return { grade: 'B', label: 'Room to Grow' };
+  if (score >= 45) return { grade: 'C+', label: 'Needs Improvement' };
+  if (score >= 35) return { grade: 'C', label: 'Significant Gaps' };
   return { grade: 'D', label: 'Leaking Cases' };
 }
 
 function categoryGrade(pct: number): string {
-  if (pct >= 85) return 'A';
-  if (pct >= 70) return 'B';
-  if (pct >= 55) return 'C';
-  if (pct >= 40) return 'D';
+  if (pct >= 80) return 'A';
+  if (pct >= 65) return 'B';
+  if (pct >= 50) return 'C';
+  if (pct >= 35) return 'D';
   return 'F';
 }
 
@@ -506,7 +535,7 @@ function checkDirectoryPresence(pages: ParsedPage[]): CheckResult {
   const maxPoints = 7;
   const dirs = checkDirectoryLinks(pages);
 
-  if (dirs.found.length >= 4) {
+  if (dirs.found.length >= 3) {
     return {
       name: 'Directory Presence', category: 'digitalPresence', passed: true,
       score: maxPoints, maxPoints,
@@ -532,9 +561,9 @@ function checkDirectoryPresence(pages: ParsedPage[]): CheckResult {
   }
   return {
     name: 'Directory Presence', category: 'digitalPresence', passed: false,
-    score: 0, maxPoints,
-    detail: 'No links to major legal directories found. Avvo, Justia, FindLaw, Super Lawyers — these are where clients verify your credibility.',
-    headline: 'No directory presence detected'
+    score: 2, maxPoints,
+    detail: 'No links to major legal directories found on your site. Most established firms are listed on Avvo, Justia, FindLaw, and Super Lawyers — linking to them builds credibility.',
+    headline: 'No directory links on site'
   };
 }
 
@@ -543,7 +572,7 @@ function checkDirectoryPresence(pages: ParsedPage[]): CheckResult {
 // ═══════════════════════════════════════════════════════════
 
 function checkReviewSignals(pages: ParsedPage[]): CheckResult {
-  const maxPoints = 10;
+  const maxPoints = 12;
   let reviewCount: number | null = null;
   let reviewRating: number | null = null;
 
@@ -554,7 +583,7 @@ function checkReviewSignals(pages: ParsedPage[]): CheckResult {
 
   // Also check body text for review mentions
   const allText = pages.map(p => p.bodyText).join(' ');
-  const reviewMention = allText.match(/(\d+)\+?\s*(?:reviews?|testimonials?|client\s*reviews?)/i);
+  const reviewMention = allText.match(/(\d+)\+?\s*(?:reviews?|testimonials?|client\s*reviews?|satisfied\s*clients?)/i);
   if (!reviewCount && reviewMention) {
     reviewCount = parseInt(reviewMention[1]);
   }
@@ -562,6 +591,22 @@ function checkReviewSignals(pages: ParsedPage[]): CheckResult {
   const ratingMention = allText.match(/(\d+\.?\d*)\s*(?:star|rating|out\s*of\s*5)/i);
   if (!reviewRating && ratingMention) {
     reviewRating = parseFloat(ratingMention[1]);
+  }
+
+  // Additional trust signal patterns
+  const starRatedPattern = /(?:5|five)\s*-?\s*star\s*rated/i;
+  const satisfiedPattern = /(\d[\d,]*)\+?\s*satisfied\s*clients?/i;
+  const winRatePattern = /\d{2,3}\s*%\s*(?:win|success|recovery)\s*rate/i;
+  if (!reviewRating && starRatedPattern.test(allText)) {
+    reviewRating = 5.0;
+  }
+  if (!reviewCount && satisfiedPattern.test(allText)) {
+    const match = allText.match(satisfiedPattern);
+    if (match) reviewCount = parseInt(match[1].replace(/,/g, ''));
+  }
+  // Win/success rate counts as a trust signal — treat as partial review evidence
+  if (!reviewCount && !reviewRating && winRatePattern.test(allText)) {
+    reviewCount = 1; // Minimum signal so the check doesn't score 0
   }
 
   if (reviewCount && reviewCount >= 100 && reviewRating && reviewRating >= 4.5) {
@@ -737,7 +782,7 @@ function checkPhoneVisibility(page: ParsedPage): CheckResult {
 }
 
 function checkLiveChat(page: ParsedPage): CheckResult {
-  const maxPoints = 4;
+  const maxPoints = 3;
   if (page.chatWidgets.length > 0) {
     return {
       name: 'Live Chat', category: 'conversionReadiness', passed: true,
@@ -819,8 +864,22 @@ function checkPageSpeed(res: FetchedResource): CheckResult {
 }
 
 function checkMultilingual(page: ParsedPage): CheckResult {
-  const maxPoints = 3;
-  if (page.hasHreflang || page.hasSpanishPath) {
+  const maxPoints = 2;
+  const html = page.html;
+
+  // Existing checks
+  const hasBasic = page.hasHreflang || page.hasSpanishPath;
+
+  // Google Translate widget / Weglot
+  const hasTranslateWidget = /gtranslate|google.*translate|googletrans/i.test(html) || /weglot/i.test(html);
+
+  // lang="es" or xml:lang="es" attributes
+  const hasLangAttr = /lang=["']es["']|xml:lang=["']es["']/i.test(html);
+
+  // Other languages in body content
+  const hasOtherLang = /chinese|mandarin|cantonese|日本語|中文|한국어/i.test(html);
+
+  if (hasBasic || hasTranslateWidget || hasLangAttr || hasOtherLang) {
     return {
       name: 'Multilingual', category: 'conversionReadiness', passed: true,
       score: maxPoints, maxPoints,
@@ -845,11 +904,29 @@ function checkAutoResponse(page: ParsedPage): CheckResult {
   const allHtml = page.html.toLowerCase();
 
   // Check for common auto-response / CRM integration signals
-  const crmPatterns = /lawmatics|lead\s*docket|law\s*ruler|clio|casepeer|filevine|litify|salesforce|hubspot|activecampaign|mailchimp|zapier/i;
-  const hasCRM = crmPatterns.test(allHtml);
+  const crmPatterns = /lawmatics|lead\s*docket|law\s*ruler|clio|casepeer|filevine|litify|salesforce|hubspot|activecampaign|mailchimp|zapier|intaker|ringba|callrail|gravity\s*forms|wpforms|ninja\s*forms|contact\s*form\s*7|formidable|jotform|typeform|wufoo|cognito\s*forms|123formbuilder|formstack|smartsheet/i;
+  let hasCRM = crmPatterns.test(allHtml);
 
   // Check for form thank-you / redirect signals
   const hasFormAction = page.forms.some(f => f.action && f.action.length > 1);
+
+  // Detect forms posting to third-party domains (CRM signal)
+  if (!hasCRM) {
+    try {
+      const siteHostname = new URL(page.url).hostname.replace(/^www\./, '');
+      for (const form of page.forms) {
+        if (form.action && /^https?:\/\//i.test(form.action)) {
+          try {
+            const formHost = new URL(form.action).hostname.replace(/^www\./, '');
+            if (formHost !== siteHostname) {
+              hasCRM = true;
+              break;
+            }
+          } catch { /* skip malformed URLs */ }
+        }
+      }
+    } catch { /* skip */ }
+  }
 
   if (hasCRM && hasFormAction) {
     return {
@@ -938,7 +1015,7 @@ export async function scanWebsite(inputUrl: string): Promise<ScanResult> {
 
   // Fetch subpages
   if (homepage) {
-    const subUrls = discoverSubpages(homepage, url).slice(0, 3);
+    const subUrls = discoverSubpages(homepage, url).slice(0, 5);
     const subResults = await Promise.allSettled(
       subUrls.map(async (subUrl) => {
         const res = await fetchResource(subUrl, 6000);
