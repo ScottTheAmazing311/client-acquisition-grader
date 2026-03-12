@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { scanWebsite } from '../../lib/scanner';
 
-export const maxDuration = 30;
+export const maxDuration = 120; // Allow time for Cloudflare crawl + analysis
 
 export async function POST(request: NextRequest) {
   try {

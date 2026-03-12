@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { crawlSite, type CrawlResult } from './cloudflare-crawl';
 
 // ═══════════════════════════════════════════════════════════
 // TYPES
@@ -40,6 +41,8 @@ export interface ScanResult {
   scanDurationMs: number;
   headlineFindings: string[];
   errors: string[];
+  crawlEnhanced: boolean;
+  crawlPagesUsed: number;
 }
 
 interface FetchedResource {
@@ -998,22 +1001,40 @@ export async function scanWebsite(inputUrl: string): Promise<ScanResult> {
   const domain = new URL(url).hostname;
   const isSSL = url.startsWith('https');
 
-  // Parallel fetch
-  const [homepageRes, robotsRes, sitemapRes, llmsRes] = await Promise.all([
+  // Parallel fetch: standard resources + Cloudflare crawl
+  const [homepageRes, robotsRes, sitemapRes, llmsRes, crawlOutcome] = await Promise.all([
     fetchResource(url),
     fetchResource(origin + '/robots.txt', 5000),
     fetchResource(origin + '/sitemap.xml', 5000),
     fetchResource(origin + '/llms.txt', 5000),
+    crawlSite({ url, limit: 75, maxDepth: 3, formats: ['html'] }).catch(() => null),
   ]);
 
-  if (!homepageRes.content || homepageRes.status !== 200) {
+  const crawlResult: CrawlResult | null = crawlOutcome ?? null;
+  let usedCrawl = false;
+
+  // Try standard homepage first; fall back to crawl HTML if fetch failed
+  let homepageContent = homepageRes.content;
+  if ((!homepageContent || homepageRes.status !== 200) && crawlResult) {
+    const crawlHome = crawlResult.pages.find(p => {
+      if (p.status !== 'completed' || !p.html) return false;
+      try { return new URL(p.url).pathname === '/' || new URL(p.url).pathname === ''; } catch { return false; }
+    });
+    if (crawlHome?.html) {
+      homepageContent = crawlHome.html;
+      usedCrawl = true;
+    }
+  }
+
+  if (!homepageContent) {
     errors.push('Could not fetch homepage');
   }
 
-  const homepage = homepageRes.content ? parsePage(homepageRes.content, url, isSSL) : null;
+  const homepage = homepageContent ? parsePage(homepageContent, url, isSSL) : null;
   const allPages: ParsedPage[] = homepage ? [homepage] : [];
+  const seenUrls = new Set<string>([url]);
 
-  // Fetch subpages
+  // Fetch subpages via standard fetch
   if (homepage) {
     const subUrls = discoverSubpages(homepage, url).slice(0, 5);
     const subResults = await Promise.allSettled(
@@ -1024,7 +1045,31 @@ export async function scanWebsite(inputUrl: string): Promise<ScanResult> {
       })
     );
     for (const r of subResults) {
-      if (r.status === 'fulfilled' && r.value) allPages.push(r.value);
+      if (r.status === 'fulfilled' && r.value) {
+        allPages.push(r.value);
+        seenUrls.add(r.value.url);
+      }
+    }
+  }
+
+  // Merge additional crawl pages (JS-rendered content the basic fetch missed)
+  if (crawlResult) {
+    for (const crawlPage of crawlResult.pages) {
+      if (crawlPage.status !== 'completed' || !crawlPage.html) continue;
+      if (seenUrls.has(crawlPage.url)) continue;
+      try {
+        const pageUrl = new URL(crawlPage.url);
+        if (pageUrl.hostname !== domain) continue;
+        // Only add relevant pages (practice areas, attorneys, results, etc.)
+        const path = pageUrl.pathname.toLowerCase();
+        const isRelevant = /\/(about|team|attorney|lawyer|practice|result|verdict|review|testimonial|contact|case|people)/.test(path);
+        if (!isRelevant && allPages.length >= 10) continue;
+        const parsed = parsePage(crawlPage.html, crawlPage.url, isSSL);
+        allPages.push(parsed);
+        seenUrls.add(crawlPage.url);
+        usedCrawl = true;
+        if (allPages.length >= 15) break; // Cap total pages
+      } catch { /* skip invalid URLs */ }
     }
   }
 
@@ -1101,5 +1146,7 @@ export async function scanWebsite(inputUrl: string): Promise<ScanResult> {
     url, domain, firmName, overallScore, grade, gradeLabel,
     categories, totalChecks: checks.length, passedChecks: checks.filter(c => c.passed).length,
     scanDurationMs: Date.now() - startTime, headlineFindings: headlines, errors,
+    crawlEnhanced: usedCrawl,
+    crawlPagesUsed: usedCrawl ? allPages.length : 0,
   };
 }
