@@ -261,7 +261,9 @@ function parsePage(html: string, url: string, isSSL: boolean): ParsedPage {
     return null;
   }
   for (const item of jsonLd) {
-    const rating = findAggregateRating(item);
+    let rating = findAggregateRating(item);
+    // Handle AggregateRating as array (e.g. "AggregateRating":[{...}])
+    if (Array.isArray(rating)) rating = rating[0];
     if (rating) {
       reviewCount = parseInt(rating.reviewCount || rating.ratingCount) || null;
       reviewRating = parseFloat(rating.ratingValue) || null;
@@ -1008,7 +1010,7 @@ export async function scanWebsite(inputUrl: string): Promise<ScanResult> {
     fetchResource(origin + '/robots.txt', 5000),
     fetchResource(origin + '/sitemap.xml', 5000),
     fetchResource(origin + '/llms.txt', 5000),
-    crawlSite({ url, limit: 75, maxDepth: 3, formats: ['html'], maxAge: 3600 }).catch(() => null),
+    crawlSite({ url, limit: 30, maxDepth: 2, formats: ['html'], maxAge: 3600 }).catch(() => null),
   ]);
 
   const crawlResult: CrawlResult | null = crawlOutcome ?? null;
