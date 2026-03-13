@@ -1007,69 +1007,75 @@ export async function scanWebsite(inputUrl: string): Promise<ScanResult> {
     fetchResource(origin + '/robots.txt', 5000),
     fetchResource(origin + '/sitemap.xml', 5000),
     fetchResource(origin + '/llms.txt', 5000),
-    crawlSite({ url, limit: 75, maxDepth: 3, formats: ['html'] }).catch(() => null),
+    crawlSite({ url, limit: 75, maxDepth: 3, formats: ['html'], maxAge: 3600 }).catch(() => null),
   ]);
 
   const crawlResult: CrawlResult | null = crawlOutcome ?? null;
   let usedCrawl = false;
 
-  // Try standard homepage first; fall back to crawl HTML if fetch failed
-  let homepageContent = homepageRes.content;
-  if ((!homepageContent || homepageRes.status !== 200) && crawlResult) {
-    const crawlHome = crawlResult.pages.find(p => {
-      if (p.status !== 'completed' || !p.html) return false;
-      try { return new URL(p.url).pathname === '/' || new URL(p.url).pathname === ''; } catch { return false; }
-    });
-    if (crawlHome?.html) {
-      homepageContent = crawlHome.html;
-      usedCrawl = true;
+  // Process ALL crawl pages first (they use real browser rendering)
+  const allPages: ParsedPage[] = [];
+  const seenUrls = new Set<string>();
+
+  if (crawlResult) {
+    for (const crawlPage of crawlResult.pages) {
+      if (crawlPage.status !== 'completed' || !crawlPage.html) continue;
+      try {
+        const pageUrl = new URL(crawlPage.url);
+        if (pageUrl.hostname.replace(/^www\./, '') !== domain.replace(/^www\./, '')) continue;
+        const normalized = pageUrl.origin + pageUrl.pathname.replace(/\/$/, '');
+        if (seenUrls.has(normalized)) continue;
+        seenUrls.add(normalized);
+        seenUrls.add(crawlPage.url);
+        const parsed = parsePage(crawlPage.html, crawlPage.url, isSSL);
+        allPages.push(parsed);
+        usedCrawl = true;
+      } catch { /* skip invalid URLs */ }
     }
   }
 
-  if (!homepageContent) {
+  // Get homepage — prefer crawl version, fall back to direct fetch
+  let homepage = allPages.find(p => {
+    try { const path = new URL(p.url).pathname; return path === '/' || path === ''; } catch { return false; }
+  }) ?? null;
+
+  if (!homepage && homepageRes.content) {
+    homepage = parsePage(homepageRes.content, url, isSSL);
+    const normalized = new URL(url).origin + new URL(url).pathname.replace(/\/$/, '');
+    if (!seenUrls.has(normalized) && !seenUrls.has(url)) {
+      allPages.unshift(homepage);
+      seenUrls.add(normalized);
+      seenUrls.add(url);
+    }
+  }
+
+  if (!homepage) {
     errors.push('Could not fetch homepage');
   }
 
-  const homepage = homepageContent ? parsePage(homepageContent, url, isSSL) : null;
-  const allPages: ParsedPage[] = homepage ? [homepage] : [];
-  const seenUrls = new Set<string>([url]);
-
-  // Fetch subpages via standard fetch
-  if (homepage) {
-    const subUrls = discoverSubpages(homepage, url).slice(0, 5);
+  // Only supplement with direct fetches if crawl had few pages
+  if (homepage && allPages.length < 10) {
+    const subUrls = discoverSubpages(homepage, url)
+      .filter(u => !seenUrls.has(u) && !seenUrls.has(u.replace(/\/$/, '')))
+      .slice(0, 5);
     const subResults = await Promise.allSettled(
       subUrls.map(async (subUrl) => {
         const res = await fetchResource(subUrl, 6000);
-        if (res.content && res.status === 200) return parsePage(res.content, subUrl, isSSL);
+        if (res.content && res.status === 200) {
+          return parsePage(res.content, subUrl, isSSL);
+        }
         return null;
       })
     );
     for (const r of subResults) {
       if (r.status === 'fulfilled' && r.value) {
-        allPages.push(r.value);
-        seenUrls.add(r.value.url);
+        const normalized = new URL(r.value.url).origin + new URL(r.value.url).pathname.replace(/\/$/, '');
+        if (!seenUrls.has(normalized)) {
+          allPages.push(r.value);
+          seenUrls.add(normalized);
+          seenUrls.add(r.value.url);
+        }
       }
-    }
-  }
-
-  // Merge additional crawl pages (JS-rendered content the basic fetch missed)
-  if (crawlResult) {
-    for (const crawlPage of crawlResult.pages) {
-      if (crawlPage.status !== 'completed' || !crawlPage.html) continue;
-      if (seenUrls.has(crawlPage.url)) continue;
-      try {
-        const pageUrl = new URL(crawlPage.url);
-        if (pageUrl.hostname !== domain) continue;
-        // Only add relevant pages (practice areas, attorneys, results, etc.)
-        const path = pageUrl.pathname.toLowerCase();
-        const isRelevant = /\/(about|team|attorney|lawyer|practice|result|verdict|review|testimonial|contact|case|people)/.test(path);
-        if (!isRelevant && allPages.length >= 10) continue;
-        const parsed = parsePage(crawlPage.html, crawlPage.url, isSSL);
-        allPages.push(parsed);
-        seenUrls.add(crawlPage.url);
-        usedCrawl = true;
-        if (allPages.length >= 15) break; // Cap total pages
-      } catch { /* skip invalid URLs */ }
     }
   }
 
