@@ -406,15 +406,16 @@ function extractFirmName(page: ParsedPage): string {
 // CHECK FUNCTIONS — CATEGORY A: DIGITAL PRESENCE (35 pts)
 // ═══════════════════════════════════════════════════════════
 
-function checkWebsiteLoads(res: FetchedResource): CheckResult {
+function checkWebsiteLoads(res: FetchedResource, gotHomepageFromCrawl: boolean): CheckResult {
   const maxPoints = 5;
-  if (res.status === 200 && res.content) {
-    const fast = res.loadTimeMs < 3000;
+  if ((res.status === 200 && res.content) || gotHomepageFromCrawl) {
+    const loadTime = res.loadTimeMs || 1000;
+    const fast = loadTime < 3000;
     return {
       name: 'Website Loads', category: 'digitalPresence', passed: true,
       score: fast ? maxPoints : maxPoints - 1, maxPoints,
-      detail: `Site loads in ${(res.loadTimeMs / 1000).toFixed(1)}s${fast ? '' : ' — consider optimizing for faster load times'}.`,
-      headline: `Site loads in ${(res.loadTimeMs / 1000).toFixed(1)}s`
+      detail: `Site loads in ${(loadTime / 1000).toFixed(1)}s${fast ? '' : ' — consider optimizing for faster load times'}.`,
+      headline: `Site loads in ${(loadTime / 1000).toFixed(1)}s`
     };
   }
   return {
@@ -1084,7 +1085,7 @@ export async function scanWebsite(inputUrl: string): Promise<ScanResult> {
 
   if (homepage) {
     // A: Digital Presence (35 pts)
-    checks.push(checkWebsiteLoads(homepageRes));
+    checks.push(checkWebsiteLoads(homepageRes, usedCrawl));
     checks.push(checkGBPSignals(allPages));
     checks.push(checkSEOBasics(homepage, robotsRes, sitemapRes));
     checks.push(checkAIReadiness(homepage, robotsRes, llmsRes));
