@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import { crawlSite, type CrawlResult } from './cloudflare-crawl';
+import { crawlSite, renderPage, type CrawlResult } from './cloudflare-crawl';
 
 // ═══════════════════════════════════════════════════════════
 // TYPES
@@ -1011,8 +1011,8 @@ export async function scanWebsite(inputUrl: string): Promise<ScanResult> {
     fetchResource(origin + '/sitemap.xml', 5000),
     fetchResource(origin + '/llms.txt', 5000),
     Promise.race([
-      crawlSite({ url, limit: 30, maxDepth: 2, formats: ['html'], maxAge: 3600 }),
-      new Promise<null>(resolve => setTimeout(() => resolve(null), 90000)),
+      crawlSite({ url, limit: 50, maxDepth: 3, formats: ['html'], maxAge: 3600 }),
+      new Promise<null>(resolve => setTimeout(() => resolve(null), 40000)),
     ]).catch(() => null),
   ]);
 
@@ -1066,10 +1066,10 @@ export async function scanWebsite(inputUrl: string): Promise<ScanResult> {
       .slice(0, 5);
     const subResults = await Promise.allSettled(
       subUrls.map(async (subUrl) => {
+        const rendered = await renderPage(subUrl);
+        if (rendered.html) return parsePage(rendered.html, subUrl, isSSL);
         const res = await fetchResource(subUrl, 6000);
-        if (res.content && res.status === 200) {
-          return parsePage(res.content, subUrl, isSSL);
-        }
+        if (res.content && res.status === 200) return parsePage(res.content, subUrl, isSSL);
         return null;
       })
     );
